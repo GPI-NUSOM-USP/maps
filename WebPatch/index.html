@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+        <title>MapLibre Fullscreen Map</title>
+
+        <script src="pd4web.threads.js"></script>
+        <script src="pd4web.js"></script>
+
+        <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.css" />
+
+        <style>
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+            }
+
+            #map {
+                width: 100vw;
+                height: 100vh;
+            }
+
+            .overlay {
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+
+            .modal {
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                width: 400px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div style="margin: 10px; display: flex; align-items: center; gap: 10px">
+            <button onclick="addNewAudio()">Adicionar Novo Audio</button>
+            <div id="positions">Click to get lat/log of that place</div>
+        </div>
+
+        <div id="map"></div>
+        <script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
+
+        <div id="audioOverlay" class="overlay" style="display: none">
+            <div class="modal">
+                <h3>Novo Áudio</h3>
+
+                <label>Arquivo MP3 ou WAV</label>
+                <input type="file" id="audioFile" accept=".mp3,.wav,audio/mpeg,audio/wav" />
+
+                <label>Nome do Áudio</label>
+                <input type="text" id="audioName" />
+
+                <label>Latitude</label>
+                <input type="number" id="latitude" step="any" />
+
+                <label>Longitude</label>
+                <input type="number" id="longitude" step="any" />
+
+                <label>Source Number</label>
+                <input type="number" id="sourceNumber" />
+
+                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px">
+                    <button onclick="closeAudioModal()">Cancelar</button>
+                    <button onclick="saveAudio()">Salvar</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Constants
+            const linesRect = [
+                [-46.727807, -23.559442, -46.723376, -23.560907],
+                [-46.723376, -23.560907, -46.721538, -23.557336],
+                [-46.721538, -23.557336, -46.725973, -23.556],
+                [-46.725973, -23.556, -46.727807, -23.559442],
+            ];
+        </script>
+        <script>
+            const audios = [];
+
+            function addNewAudio() {
+                document.getElementById("audioOverlay").style.display = "flex";
+                document.getElementById("latitude").value = latitude;
+                document.getElementById("longitude").value = longitude;
+            }
+
+            // ───────────────────────────────────────
+            function closeAudioModal() {
+                document.getElementById("audioOverlay").style.display = "none";
+                document.getElementById("audioFile").value = "";
+                document.getElementById("audioName").value = "";
+                document.getElementById("latitude").value = "";
+                document.getElementById("longitude").value = "";
+                document.getElementById("sourceNumber").value = "";
+            }
+
+            // ───────────────────────────────────────
+            function getExtension(file) {
+                const nameExt = file.name?.split(".").pop()?.toLowerCase();
+
+                if (nameExt && nameExt.length <= 5) return nameExt;
+
+                // fallback via MIME type
+                switch (file.type) {
+                    case "audio/mpeg":
+                        return "mp3";
+                    case "audio/wav":
+                        return "wav";
+                    case "audio/x-wav":
+                        return "wav";
+                    case "audio/ogg":
+                        return "ogg";
+                    default:
+                        return "bin";
+                }
+            }
+
+            // ───────────────────────────────────────
+            async function saveAudio() {
+                const file = document.getElementById("audioFile").files[0];
+                const audioData = {
+                    file,
+                    name: document.getElementById("audioName").value,
+                    latitude: parseFloat(document.getElementById("latitude").value),
+                    longitude: parseFloat(document.getElementById("longitude").value),
+                    sourceNumber: parseInt(document.getElementById("sourceNumber").value, 10),
+                };
+                audios.push(audioData);
+                const randomColor =
+                    "#" +
+                    Math.floor(Math.random() * 16777215)
+                        .toString(16)
+                        .padStart(6, "0");
+
+                new maplibregl.Marker({
+                    color: randomColor,
+                })
+                    .setLngLat([audioData.longitude, audioData.latitude])
+                    .setPopup(
+                        new maplibregl.Popup({ offset: 25 }).setHTML(`
+                        <b>${audioData.name}</b><br>
+                        Source: ${audioData.sourceNumber}<br>
+                        Lat: ${audioData.latitude.toFixed(6)}<br>
+                        Lon: ${audioData.longitude.toFixed(6)}
+                    `),
+                    )
+                    .addTo(map);
+                closeAudioModal();
+
+                // send audio to Pd
+                let sourceNReceiver = `source${audioData.sourceNumber}-file`;
+                const arrayBuffer = await audioData.file.arrayBuffer();
+                const fileData = new Uint8Array(arrayBuffer);
+                const ext = getExtension(audioData.file);
+                const filename = `audio${audioData.sourceNumber}.${ext}`;
+                let pos = geoToLocal(audioData.longitude, audioData.latitude);
+
+                Pd4Web.sendFile(arrayBuffer, "/" + filename);
+                Pd4Web.sendFloat(`source${audioData.sourceNumber}-lon`, pos.x);
+                Pd4Web.sendFloat(`source${audioData.sourceNumber}-lat`, pos.y);
+                Pd4Web.sendSymbol(`source${audioData.sourceNumber}-file`, `audio${audioData.sourceNumber}.${ext}`);
+                Pd4Web.sendList(`source${audioData.sourceNumber}-pos`, [pos.x, pos.y]);
+
+                //Pd4WebModule
+            }
+
+            // ───────────────────────────────────────
+            function addLine(x1, y1, x2, y2) {
+                let lineStr = `${x1}-${y1}-${x2}-${y2}`;
+
+                map.addSource(lineStr, {
+                    type: "geojson",
+                    data: {
+                        type: "Feature",
+                        geometry: {
+                            type: "LineString",
+                            coordinates: [
+                                [x1, y1],
+                                [x2, y2],
+                            ],
+                        },
+                    },
+                });
+
+                map.addLayer({
+                    id: lineStr,
+                    type: "line",
+                    source: lineStr,
+                    paint: {
+                        "line-color": "#ff0000dd",
+                        "line-width": 1,
+                    },
+                });
+            }
+
+            // Depois e melhor calcular isso direito de uma lista com os pontos
+            const minLon = -46.727807;
+            const maxLon = -46.721538;
+            const minLat = -23.560907;
+            const maxLat = -23.556;
+
+            function geoToLocal(lon, lat) {
+                const nx = (lon - minLon) / (maxLon - minLon);
+                const ny = (lat - minLat) / (maxLat - minLat);
+                const x = nx * 10 - 5;
+                const y = ny * 10 - 5;
+                return { x, y };
+            }
+
+            // ───────────────────────────────────────
+        </script>
+
+        <script>
+            const map = new maplibregl.Map({
+                container: "map",
+                style: "https://tiles.openfreemap.org/styles/liberty",
+                center: [-46.7242184, -23.5597125],
+                zoom: 16,
+            });
+
+            map.on("load", () => {
+                for (points of linesRect) {
+                    addLine(points[0], points[1], points[2], points[3]);
+                }
+            });
+
+            var latitude = 0;
+            var longitude = 0;
+            map.on("click", (e) => {
+                document.getElementById("positions").innerText =
+                    `Longitude ${e.lngLat.lng.toFixed(8)} | Latitude ${e.lngLat.lat.toFixed(8)}`;
+
+                const p = geoToLocal(e.lngLat.lng, e.lngLat.lat);
+                latitude = e.lngLat.lat;
+                longitude = e.lngLat.lng;
+            });
+
+            // distancia da fonte
+            function distanceMeters(lat1, lon1, lat2, lon2) {
+                const R = 6371000;
+                const toRad = (deg) => (deg * Math.PI) / 180;
+                const dLat = toRad(lat2 - lat1);
+                const dLon = toRad(lon2 - lon1);
+                const a =
+                    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+                return R * c;
+            }
+
+            // 0-1 até 40 metros, se mais que 40m, dai ganho é 0
+            function attenuation(distanceMeters) {
+                const maxDistance = 100;
+                if (distanceMeters >= maxDistance) return 0;
+                const x = distanceMeters / maxDistance;
+                // inverse-square style approximation
+                const gain = 1 / (1 + 6 * x * x);
+                return gain;
+            }
+
+            // calculate distance
+            map.on("mousemove", (e) => {
+                //let currentPos = [e.lngLat.lat, e.lngLat.lng];
+                //const distance = distanceMeters(latitude, longitude, e.lngLat.lat, e.lngLat.lng);
+                let pos = geoToLocal(e.lngLat.lng, e.lngLat.lat);
+                if (Pd4Web) {
+                    Pd4Web.sendList("receiver", [pos.x, pos.y]);
+
+                    // atualiza os ganhos
+                    audios.forEach((audio) => {
+                        const dist = distanceMeters(audio.latitude, audio.longitude, e.lngLat.lat, e.lngLat.lng);
+                        const gain = attenuation(dist);
+                        Pd4Web.sendFloat(`source${audio.sourceNumber}-gain`, gain);
+                    });
+                }
+            });
+        </script>
+
+        <!--
+ !  ╭───────────────────────────────────╮
+ !  │              Pd4Web               │
+ !  ╰───────────────────────────────────╯
+-->
+        <script>
+            var Pd4Web = null;
+            var Pd4WebModuleAsync = null;
+            Pd4WebModule().then((module) => {
+                Pd4WebModuleAsync = module;
+                Pd4Web = new module.Pd4Web();
+                document.addEventListener(
+                    "click",
+                    (event) => {
+                        Pd4Web.openPatch("index.pd", {
+                            projectName: "MyProject",
+                            sampleRate: 48000,
+                            renderGui: false,
+                            requestMidi: false,
+                            fps: 0,
+                        });
+                        Pd4Web.init();
+                    },
+                    { once: true },
+                );
+            });
+        </script>
+    </body>
+</html>
