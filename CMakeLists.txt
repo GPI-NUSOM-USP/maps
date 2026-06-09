@@ -41,11 +41,11 @@ add_compile_options(-Wno-everything)
 # ╰──────────────────────────────────────╯
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(WARNING "Building in Debug mode")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -flto -pthread -matomics -mbulk-memory -msimd128")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -flto -pthread -matomics -mbulk-memory -msimd128")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -flto -pthread -matomics -mbulk-memory -msimd128 -m32")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -flto -pthread -matomics -mbulk-memory -msimd128 -m32")
 else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -flto -pthread -matomics -mbulk-memory -msimd128")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -flto -pthread -matomics -mbulk-memory -msimd128")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -flto -pthread -matomics -mbulk-memory -msimd128 -m32")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -flto -pthread -matomics -mbulk-memory -msimd128 -m32")
 endif()
 
 # ╭──────────────────────────────────────╮
@@ -75,11 +75,11 @@ target_link_options(
     -sMODULARIZE=1
     -sEXPORT_NAME='Pd4WebModule'
     -sEXPORTED_RUNTIME_METHODS=["FS"]
-    -sINITIAL_MEMORY=512MB
+    -sINITIAL_MEMORY=1024MB
     -sEXPORT_ES6=${PD4WEB_AS_ES6}
     -sUSE_PTHREADS=1
     -sPTHREAD_POOL_SIZE=4
-    -sWASMFS=0
+    -sWASMFS=1
     -sWASM=1
     -sWASM_WORKERS=1
     -sAUDIO_WORKLET=1
