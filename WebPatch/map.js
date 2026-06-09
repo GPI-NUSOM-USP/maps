@@ -235,9 +235,6 @@ function onDeviceOrientation(event) {
     const rawHeading = getAbsoluteNorth(event);
     const heading = smoothCompassHeading(rawHeading);
     map.setBearing(heading);
-    if (Pd4Web) {
-        Pd4Web.sendFloat("compass-yaw", heading);
-    }
 }
 
 // ─────────────────────────────────────
@@ -291,7 +288,6 @@ map.on("mousemove", (e) => {
 map.on("rotate", () => {
     const bearing = (map.getBearing() + 360) % 360;
     currentBearing = smoothCompassHeading(bearing);
-    console.log(currentBearing);
     if (Pd4Web) {
         Pd4Web.sendFloat("compass-yaw", bearing);
     }
