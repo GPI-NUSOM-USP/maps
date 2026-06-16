@@ -1,8 +1,27 @@
 // ─────────────────────────────────────
 var current_latitude = 0;
 var current_longitude = 0;
-const CENTER_MAP = [-46.64767763, -23.56106566];
+var patchIsOpen = false;
+let CENTER_MAP = [-46.725513951680966, -23.558790769911838];
+const CENTER_RECT_X_METERS = 400;
+const CENTER_RECT_Y_METERS = 300;
+let geolocationWatchId = null;
+
 const audios = [];
+const places = [
+    { id: 1, name: "Place 1", x: -120, y: 70, z: 0 },
+    { id: 2, name: "Place 2", x: 95, y: -55, z: 0 },
+    { id: 3, name: "Place 3", x: -35, y: -105, z: 0 },
+    { id: 4, name: "Place 4", x: 145, y: 85, z: 0 },
+    { id: 5, name: "Place 5", x: 15, y: 20, z: 0 },
+];
+const placeColors = {
+    1: "#d7263d",
+    2: "#1b998b",
+    3: "#f46036",
+    4: "#2e294e",
+    5: "#f3a712",
+};
 var compassActive = false;
 const map = new maplibregl.Map({
     container: "map",
@@ -10,6 +29,119 @@ const map = new maplibregl.Map({
     center: CENTER_MAP,
     zoom: 16,
 });
+
+// ───────────────────────────────────────
+function isSmartphone() {
+    const coarsePointer = window.matchMedia?.("(pointer: coarse)")?.matches;
+    const narrowScreen = window.matchMedia?.("(max-width: 900px)")?.matches;
+    return coarsePointer && narrowScreen && navigator.maxTouchPoints > 0;
+}
+
+// ───────────────────────────────────────
+function getRectAroundCenter([lng, lat], widthMeters, heightMeters) {
+    const metersPerDegreeLat = 111320;
+    const metersPerDegreeLng = metersPerDegreeLat * Math.cos((lat * Math.PI) / 180);
+    const halfLng = widthMeters / 2 / metersPerDegreeLng;
+    const halfLat = heightMeters / 2 / metersPerDegreeLat;
+
+    return [
+        [lng - halfLng, lat + halfLat],
+        [lng + halfLng, lat + halfLat],
+        [lng + halfLng, lat - halfLat],
+        [lng - halfLng, lat - halfLat],
+        [lng - halfLng, lat + halfLat],
+    ];
+}
+
+// ───────────────────────────────────────
+function geoToRoomCoordinates([lng, lat], [centerLng, centerLat] = CENTER_MAP) {
+    const metersPerDegreeLat = 111320;
+    const metersPerDegreeLng = metersPerDegreeLat * Math.cos((centerLat * Math.PI) / 180);
+    const x = (lng - centerLng) * metersPerDegreeLng;
+    const y = -(lat - centerLat) * metersPerDegreeLat;
+
+    return {
+        x,
+        y,
+        inside:
+            x >= -CENTER_RECT_X_METERS / 2 &&
+            x <= CENTER_RECT_X_METERS / 2 &&
+            y >= -CENTER_RECT_Y_METERS / 2 &&
+            y <= CENTER_RECT_Y_METERS / 2,
+    };
+}
+
+// ───────────────────────────────────────
+function roomToGeoCoordinates({ x, y }, [centerLng, centerLat] = CENTER_MAP) {
+    const metersPerDegreeLat = 111320;
+    const metersPerDegreeLng = metersPerDegreeLat * Math.cos((centerLat * Math.PI) / 180);
+    const lng = centerLng + x / metersPerDegreeLng;
+    const lat = centerLat - y / metersPerDegreeLat;
+    return [lng, lat];
+}
+
+// ───────────────────────────────────────
+function distanceRoomMeters(positionA, positionB) {
+    const dx = positionA.x - positionB.x;
+    const dy = positionA.y - positionB.y;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+// ───────────────────────────────────────
+function getCenterRectData() {
+    return {
+        type: "Feature",
+        properties: {},
+        geometry: {
+            type: "LineString",
+            coordinates: getRectAroundCenter(CENTER_MAP, CENTER_RECT_X_METERS, CENTER_RECT_Y_METERS),
+        },
+    };
+}
+
+// ───────────────────────────────────────
+function addCenterRect() {
+    map.addSource("center-map-rect", {
+        type: "geojson",
+        data: getCenterRectData(),
+    });
+
+    map.addLayer({
+        id: "center-map-rect-outline",
+        type: "line",
+        source: "center-map-rect",
+        paint: {
+            "line-color": "#ff0000",
+            "line-width": 2,
+        },
+    });
+}
+
+// ───────────────────────────────────────
+function updateCenterRect() {
+    const source = map.getSource("center-map-rect");
+    if (source) source.setData(getCenterRectData());
+}
+
+// ───────────────────────────────────────
+function addPlaceMarkers() {
+    places.forEach((place) => {
+        const markerColor = placeColors[place.id];
+
+        new maplibregl.Marker({ color: markerColor })
+            .setLngLat(roomToGeoCoordinates(place))
+            .setPopup(
+                new maplibregl.Popup({ offset: 25 }).setHTML(`
+                    <b>${place.name}</b><br>
+                    Source: ${place.id}<br>
+                    X: ${place.x}<br>
+                    Y: ${place.y}<br>
+                    Z: ${place.z}
+                `),
+            )
+            .addTo(map);
+    });
+}
 
 // ───────────────────────────────────────
 function addNewAudio() {
@@ -146,11 +278,11 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
 // ─────────────────────────────────────
 // Gabriel's math
 function attenuation(distanceMeters) {
-    const halfDistance = 40;
+    const halfDistance = 500;
     const alpha = Math.log(0.5) / halfDistance;
     let gain = Math.exp(alpha * distanceMeters);
     gain = Math.min(1, Math.max(0, gain));
-    console.log(distanceMeters, gain);
+    //console.log(distanceMeters, gain);
     return gain;
 }
 
@@ -249,6 +381,17 @@ function startListening() {
 }
 
 // ─────────────────────────────────────
+async function fileToArrayBuffer(audioFile) {
+    const response = await fetch(audioFile);
+    if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    Pd4Web.sendFile(arrayBuffer, audioFile.split("/").pop());
+}
+
+// ─────────────────────────────────────
 // Map listener
 // ─────────────────────────────────────
 const marker = new maplibregl.Marker();
@@ -261,12 +404,72 @@ function moveNorth([lng, lat], meters) {
 }
 
 // ─────────────────────────────────────
+function updateListenerPosition(lng, lat, options = {}) {
+    current_latitude = lat;
+    current_longitude = lng;
+    marker.setLngLat([lng, lat]);
+
+    if (options.centerMap) {
+        map.easeTo({ center: [lng, lat], duration: 500 });
+    }
+
+    if (Pd4Web) {
+        const roomPosition = geoToRoomCoordinates([lng, lat]);
+        Pd4Web.sendList("receiver", [roomPosition.x, roomPosition.y, 0]);
+
+        places.forEach((place) => {
+            const dist = distanceRoomMeters(roomPosition, place);
+            Pd4Web.sendFloat(`gain${place.id}`, attenuation(dist));
+        });
+
+        // atualiza os ganhos
+        audios.forEach((audio) => {
+            const dist = distanceMeters(audio.latitude, audio.longitude, lat, lng);
+            const gain = attenuation(dist);
+            Pd4Web.sendFloat(`source${audio.sourceNumber}-gain`, gain);
+        });
+    }
+}
+
+// ─────────────────────────────────────
+function startGeolocationTracking() {
+    if (!isSmartphone() || geolocationWatchId !== null) return;
+
+    if (!navigator.geolocation) {
+        console.warn("Geolocation is not available in this browser.");
+        return;
+    }
+
+    const options = {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 10000,
+    };
+
+    const onPosition = (position) => {
+        updateListenerPosition(position.coords.longitude, position.coords.latitude, {
+            centerMap: true,
+        });
+    };
+
+    const onError = (error) => {
+        console.warn("Unable to read smartphone location:", error.message);
+    };
+
+    navigator.geolocation.getCurrentPosition(onPosition, onError, options);
+    geolocationWatchId = navigator.geolocation.watchPosition(onPosition, onError, options);
+}
+
+// ─────────────────────────────────────
 map.on("load", () => {
     const newmarker = new maplibregl.Marker();
     marker.setLngLat(map.getCenter()).addTo(map);
 
     const soundPosition = moveNorth(CENTER_MAP, 50);
     new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
+    addPlaceMarkers();
+    addCenterRect();
+    startGeolocationTracking();
 });
 
 // native compass
@@ -274,14 +477,8 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 // ─────────────────────────────────────
 map.on("mousemove", (e) => {
-    if (Pd4Web) {
-        // atualiza os ganhos
-        audios.forEach((audio) => {
-            const dist = distanceMeters(audio.latitude, audio.longitude, e.lngLat.lat, e.lngLat.lng);
-            const gain = attenuation(dist);
-            Pd4Web.sendFloat(`source${audio.sourceNumber}-gain`, gain);
-        });
-    }
+    if (isSmartphone()) return;
+    updateListenerPosition(e.lngLat.lng, e.lngLat.lat);
 });
 
 // ─────────────────────────────────────
@@ -289,15 +486,13 @@ map.on("rotate", () => {
     const bearing = (map.getBearing() + 360) % 360;
     currentBearing = smoothCompassHeading(bearing);
     if (Pd4Web) {
-        Pd4Web.sendFloat("compass-yaw", bearing);
+        // new study
+        Pd4Web.sendFloat("compass-yaw", bearing - 180);
     }
 });
 
 // ─────────────────────────────────────
-map.on("click", (e) => {
-    current_latitude = e.lngLat.lat;
-    current_longitude = e.lngLat.lng;
-    startListening();
+async function sendFiles() {
     Pd4Web.openPatch("index.pd", {
         projectName: "MyProject",
         sampleRate: 48000,
@@ -305,5 +500,40 @@ map.on("click", (e) => {
         requestMidi: false,
         fps: 0,
     });
+
+    // Init
     Pd4Web.init();
+
+    // Send coordinates
+    places.forEach((place) => {
+        console.log(place.id);
+        Pd4Web.sendList("source-positions", [place.id, place.x, place.y, place.z]);
+    });
+}
+
+// ─────────────────────────────────────
+map.on("click", (e) => {
+    current_latitude = e.lngLat.lat;
+    current_longitude = e.lngLat.lng;
+    const roomPosition = geoToRoomCoordinates([current_longitude, current_latitude]);
+
+    console.log("Clicked position:", {
+        x: Number(roomPosition.x.toFixed(3)),
+        y: Number(roomPosition.y.toFixed(3)),
+        longitude: current_longitude,
+        latitude: current_latitude,
+        lngLat: [current_longitude, current_latitude],
+        room: {
+            x: Number(roomPosition.x.toFixed(3)),
+            y: Number(roomPosition.y.toFixed(3)),
+            inside: roomPosition.inside,
+        },
+    });
+    startListening();
+    startGeolocationTracking();
+
+    if (!patchIsOpen) {
+        sendFiles();
+        patchIsOpen = true;
+    }
 });

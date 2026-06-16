@@ -14,10 +14,10 @@
             "type": "image/png"
         }
     ],
-    "name": ".",
+    "name": "maps",
     "orientation": "any",
     "screenshots": "",
-    "short_name": ".",
+    "short_name": "maps",
     "start_url": "index.html",
     "theme_color": "#000000"
 }
