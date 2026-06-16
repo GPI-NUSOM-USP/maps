@@ -6,6 +6,7 @@ let CENTER_MAP = [-46.725513951680966, -23.558790769911838];
 const CENTER_RECT_X_METERS = 400;
 const CENTER_RECT_Y_METERS = 300;
 let geolocationWatchId = null;
+let currentCompassHeading = 0;
 
 const audios = [];
 const places = [
@@ -85,6 +86,18 @@ function distanceRoomMeters(positionA, positionB) {
     const dx = positionA.x - positionB.x;
     const dy = positionA.y - positionB.y;
     return Math.sqrt(dx * dx + dy * dy);
+}
+
+// ───────────────────────────────────────
+function compassAzimuthBetween(fromLng, fromLat, toLng, toLat) {
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const toDeg = (rad) => (rad * 180) / Math.PI;
+    const startLat = toRad(fromLat);
+    const endLat = toRad(toLat);
+    const deltaLng = toRad(toLng - fromLng);
+    const y = Math.sin(deltaLng) * Math.cos(endLat);
+    const x = Math.cos(startLat) * Math.sin(endLat) - Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
+    return normalize(toDeg(Math.atan2(y, x)));
 }
 
 // ───────────────────────────────────────
@@ -217,10 +230,9 @@ async function saveAudio() {
     // let pos = geoToLocal(audioData.longitude, audioData.latitude);
 
     Pd4Web.sendFile(arrayBuffer, "/" + filename);
-    Pd4Web.sendFloat(`source${audioData.sourceNumber}-lon`, pos.x);
-    Pd4Web.sendFloat(`source${audioData.sourceNumber}-lat`, pos.y);
+    sendSourceAzimuth(audioData.sourceNumber, audioData.longitude, audioData.latitude);
+    sendSourceGain(audioData.sourceNumber, 1);
     Pd4Web.sendSymbol(`source${audioData.sourceNumber}-file`, `audio${audioData.sourceNumber}.${ext}`);
-    // Pd4Web.sendList(`source${audioData.sourceNumber}-pos`, [pos.x, pos.y]);
 }
 
 // ───────────────────────────────────────
@@ -278,12 +290,46 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
 // ─────────────────────────────────────
 // Gabriel's math
 function attenuation(distanceMeters) {
-    const halfDistance = 500;
+    const halfDistance = 20;
     const alpha = Math.log(0.5) / halfDistance;
     let gain = Math.exp(alpha * distanceMeters);
     gain = Math.min(1, Math.max(0, gain));
     //console.log(distanceMeters, gain);
     return gain;
+}
+
+// ─────────────────────────────────────
+function sendSourceAzimuth(sourceNumber, sourceLng, sourceLat) {
+    if (!Pd4Web) return;
+    const compassAzimuth = compassAzimuthBetween(current_longitude, current_latitude, sourceLng, sourceLat);
+    const azimuth = normalize(compassAzimuth - currentCompassHeading);
+    Pd4Web.sendFloat(`source${sourceNumber}-azi`, azimuth);
+}
+
+// ─────────────────────────────────────
+function sendSourceGain(sourceNumber, gain) {
+    if (!Pd4Web) return;
+    Pd4Web.sendFloat(`source${sourceNumber}-gain`, gain);
+    Pd4Web.sendFloat(`gain${sourceNumber}`, gain);
+}
+
+// ─────────────────────────────────────
+function sendCurrentSourceSpatialData() {
+    if (!Pd4Web) return;
+    const roomPosition = geoToRoomCoordinates([current_longitude, current_latitude]);
+
+    places.forEach((place) => {
+        const [sourceLng, sourceLat] = roomToGeoCoordinates(place);
+        const dist = distanceRoomMeters(roomPosition, place);
+        sendSourceAzimuth(place.id, sourceLng, sourceLat);
+        sendSourceGain(place.id, attenuation(dist));
+    });
+
+    audios.forEach((audio) => {
+        const dist = distanceMeters(audio.latitude, audio.longitude, current_latitude, current_longitude);
+        sendSourceAzimuth(audio.sourceNumber, audio.longitude, audio.latitude);
+        sendSourceGain(audio.sourceNumber, attenuation(dist));
+    });
 }
 
 //╭─────────────────────────────────────╮
@@ -365,8 +411,11 @@ function smoothCompassHeading(targetHeading) {
 // ─────────────────────────────────────
 function onDeviceOrientation(event) {
     const rawHeading = getAbsoluteNorth(event);
+    if (rawHeading === null) return;
     const heading = smoothCompassHeading(rawHeading);
+    currentCompassHeading = heading;
     map.setBearing(heading);
+    sendCurrentSourceSpatialData();
 }
 
 // ─────────────────────────────────────
@@ -414,20 +463,7 @@ function updateListenerPosition(lng, lat, options = {}) {
     }
 
     if (Pd4Web) {
-        const roomPosition = geoToRoomCoordinates([lng, lat]);
-        Pd4Web.sendList("receiver", [roomPosition.x, roomPosition.y, 0]);
-
-        places.forEach((place) => {
-            const dist = distanceRoomMeters(roomPosition, place);
-            Pd4Web.sendFloat(`gain${place.id}`, attenuation(dist));
-        });
-
-        // atualiza os ganhos
-        audios.forEach((audio) => {
-            const dist = distanceMeters(audio.latitude, audio.longitude, lat, lng);
-            const gain = attenuation(dist);
-            Pd4Web.sendFloat(`source${audio.sourceNumber}-gain`, gain);
-        });
+        sendCurrentSourceSpatialData();
     }
 }
 
@@ -484,11 +520,8 @@ map.on("mousemove", (e) => {
 // ─────────────────────────────────────
 map.on("rotate", () => {
     const bearing = (map.getBearing() + 360) % 360;
-    currentBearing = smoothCompassHeading(bearing);
-    if (Pd4Web) {
-        // new study
-        Pd4Web.sendFloat("compass-yaw", bearing - 180);
-    }
+    currentCompassHeading = bearing;
+    sendCurrentSourceSpatialData();
 });
 
 // ─────────────────────────────────────
@@ -504,11 +537,7 @@ async function sendFiles() {
     // Init
     Pd4Web.init();
 
-    // Send coordinates
-    places.forEach((place) => {
-        console.log(place.id);
-        Pd4Web.sendList("source-positions", [place.id, place.x, place.y, place.z]);
-    });
+    sendCurrentSourceSpatialData();
 }
 
 // ─────────────────────────────────────

@@ -92,14 +92,14 @@ target_link_options(
 # Externals includes
 include("${CMAKE_CURRENT_SOURCE_DIR}/Pd4Web/Externals/pdlua.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/Pd4Web/Externals/xlab.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/Pd4Web/Externals/earplug~.cmake")
 
 
 # Project Externals Libraries
 target_link_libraries(pd4web PRIVATE 
                                 pdlua
-                                saf.binaural_tilde
-                                saf.roomsim_tilde
-                                mar_tilde)
+                                mar_tilde
+                                earplug_tilde)
 
 # Preload Files
 get_target_property(EMCC_LINK_FLAGS pd4web LINK_FLAGS)
