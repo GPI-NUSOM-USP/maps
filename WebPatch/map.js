@@ -9,6 +9,8 @@ let geolocationWatchId = null;
 let currentCompassHeading = 0;
 let smartphoneLocationReady = false;
 let compassReady = false;
+let activeCompassEventType = null;
+let lastRenderedCompassHeading = null;
 
 const audios = [];
 const places = [
@@ -423,13 +425,35 @@ function smoothCompassHeading(targetHeading) {
 }
 
 // ─────────────────────────────────────
+function rotateMapToCompass(heading) {
+    if (lastRenderedCompassHeading !== null && Math.abs(shortestAngleDelta(lastRenderedCompassHeading, heading)) < 0.35) {
+        return;
+    }
+
+    lastRenderedCompassHeading = heading;
+    map.rotateTo(heading, {
+        duration: 0,
+        essential: true,
+    });
+}
+
+// ─────────────────────────────────────
 function onDeviceOrientation(event) {
+    if (activeCompassEventType === "deviceorientationabsolute" && event.type !== activeCompassEventType) {
+        return;
+    }
+
     const rawHeading = getAbsoluteNorth(event);
     if (rawHeading === null) return;
+
+    if (event.type === "deviceorientationabsolute" || activeCompassEventType === null) {
+        activeCompassEventType = event.type;
+    }
+
     const heading = smoothCompassHeading(rawHeading);
     compassReady = true;
     currentCompassHeading = heading;
-    map.setBearing(heading);
+    rotateMapToCompass(heading);
     if (!isSmartphone() || smartphoneLocationReady) {
         sendCurrentSourceSpatialData();
     }
