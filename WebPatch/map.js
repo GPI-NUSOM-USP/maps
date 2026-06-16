@@ -8,6 +8,7 @@ const CENTER_RECT_Y_METERS = 300;
 let geolocationWatchId = null;
 let currentCompassHeading = 0;
 let smartphoneLocationReady = false;
+let compassReady = false;
 
 const audios = [];
 const places = [
@@ -368,46 +369,33 @@ function normalize(angle) {
 }
 
 // ─────────────────────────────────────
-function getAbsoluteNorth(event) {
-    const ua = navigator.userAgent || navigator.vendor || window.opera;
-    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    const isAndroid = /Android/.test(ua);
+function getScreenAngle() {
     let screenAngle = 0;
     if (screen.orientation && typeof screen.orientation.angle === "number") {
         screenAngle = screen.orientation.angle;
     } else if (typeof window.orientation === "number") {
         screenAngle = window.orientation;
     }
-    screenAngle = normalize(screenAngle);
-    if (isIOS && typeof event.webkitCompassHeading === "number") {
-        let heading = event.webkitCompassHeading;
-        if (isNaN(heading)) {
-            return null;
-        }
-        heading += screenAngle;
-        return normalize(heading);
+
+    return normalize(screenAngle);
+}
+
+// ─────────────────────────────────────
+function validHeading(value) {
+    return typeof value === "number" && Number.isFinite(value);
+}
+
+// ─────────────────────────────────────
+function getAbsoluteNorth(event) {
+    if (validHeading(event.webkitCompassHeading)) {
+        return normalize(event.webkitCompassHeading);
     }
 
-    if (isAndroid && event.alpha != null) {
-        let heading = event.alpha;
-        if (isNaN(heading)) {
-            return null;
-        }
-        heading = 360 - heading;
-        heading += screenAngle;
-        return normalize(heading);
+    if (!validHeading(event.alpha)) {
+        return null;
     }
 
-    if (event.absolute === true && event.alpha != null) {
-        let heading = event.alpha;
-        if (isNaN(heading)) {
-            return null;
-        }
-        heading = 360 - heading;
-        heading += screenAngle;
-        return normalize(heading);
-    }
-    return null;
+    return normalize(360 - event.alpha + getScreenAngle());
 }
 
 // ─────────────────────────────────────
@@ -439,9 +427,12 @@ function onDeviceOrientation(event) {
     const rawHeading = getAbsoluteNorth(event);
     if (rawHeading === null) return;
     const heading = smoothCompassHeading(rawHeading);
+    compassReady = true;
     currentCompassHeading = heading;
     map.setBearing(heading);
-    sendCurrentSourceSpatialData();
+    if (!isSmartphone() || smartphoneLocationReady) {
+        sendCurrentSourceSpatialData();
+    }
 }
 
 // ─────────────────────────────────────
@@ -461,15 +452,31 @@ async function requestCompassPermission() {
 function startListening() {
     if (compassActive) return;
 
-    if ("ondeviceorientationabsolute" in window) {
-        console.log("activating compass");
-        window.addEventListener("deviceorientationabsolute", onDeviceOrientation, true);
-    } else {
-        console.log("activating compass");
-        window.addEventListener("deviceorientation", onDeviceOrientation, true);
-    }
-
+    console.log("activating compass");
+    window.addEventListener("deviceorientationabsolute", onDeviceOrientation, true);
+    window.addEventListener("deviceorientation", onDeviceOrientation, true);
     compassActive = true;
+}
+
+// ─────────────────────────────────────
+function waitForCompassReading(timeoutMs = 2500) {
+    if (compassReady) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        const interval = window.setInterval(() => {
+            if (compassReady) {
+                window.clearInterval(interval);
+                resolve(true);
+                return;
+            }
+
+            if (Date.now() - startedAt >= timeoutMs) {
+                window.clearInterval(interval);
+                resolve(false);
+            }
+        }, 100);
+    });
 }
 
 // ─────────────────────────────────────
@@ -611,6 +618,7 @@ async function startExperience() {
         } else {
             console.warn("Compass permission was not granted.");
         }
+        const compassStarted = compassAllowed ? await waitForCompassReading() : false;
 
         setStartStatus("Requesting location access...");
         const locationAllowed = await startGeolocationTracking();
@@ -624,7 +632,7 @@ async function startExperience() {
 
         if (!locationAllowed) {
             setStartStatus("Started without location.");
-        } else if (!compassAllowed) {
+        } else if (!compassStarted) {
             setStartStatus("Started without compass.");
         } else {
             setStartStatus("Started.");
