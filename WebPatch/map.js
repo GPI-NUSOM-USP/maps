@@ -7,6 +7,7 @@ const CENTER_RECT_X_METERS = 400;
 const CENTER_RECT_Y_METERS = 300;
 let geolocationWatchId = null;
 let currentCompassHeading = 0;
+let smartphoneLocationReady = false;
 
 const audios = [];
 const places = [
@@ -30,6 +31,31 @@ const map = new maplibregl.Map({
     center: CENTER_MAP,
     zoom: 16,
 });
+
+// ───────────────────────────────────────
+function setStartStatus(message) {
+    const status = document.getElementById("startStatus");
+    if (status) status.textContent = message;
+}
+
+// ───────────────────────────────────────
+function hideStartPanel() {
+    const panel = document.getElementById("startPanel");
+    if (panel) panel.style.display = "none";
+}
+
+// ───────────────────────────────────────
+function waitForPd4Web() {
+    if (Pd4Web) return Promise.resolve();
+
+    return new Promise((resolve) => {
+        const interval = window.setInterval(() => {
+            if (!Pd4Web) return;
+            window.clearInterval(interval);
+            resolve();
+        }, 50);
+    });
+}
 
 // ───────────────────────────────────────
 function isSmartphone() {
@@ -419,7 +445,22 @@ function onDeviceOrientation(event) {
 }
 
 // ─────────────────────────────────────
+async function requestCompassPermission() {
+    if (
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function"
+    ) {
+        const permission = await DeviceOrientationEvent.requestPermission();
+        return permission === "granted";
+    }
+
+    return true;
+}
+
+// ─────────────────────────────────────
 function startListening() {
+    if (compassActive) return;
+
     if ("ondeviceorientationabsolute" in window) {
         console.log("activating compass");
         window.addEventListener("deviceorientationabsolute", onDeviceOrientation, true);
@@ -427,6 +468,8 @@ function startListening() {
         console.log("activating compass");
         window.addEventListener("deviceorientation", onDeviceOrientation, true);
     }
+
+    compassActive = true;
 }
 
 // ─────────────────────────────────────
@@ -469,11 +512,12 @@ function updateListenerPosition(lng, lat, options = {}) {
 
 // ─────────────────────────────────────
 function startGeolocationTracking() {
-    if (!isSmartphone() || geolocationWatchId !== null) return;
+    if (!isSmartphone()) return Promise.resolve(true);
+    if (geolocationWatchId !== null) return Promise.resolve(smartphoneLocationReady);
 
     if (!navigator.geolocation) {
         console.warn("Geolocation is not available in this browser.");
-        return;
+        return Promise.resolve(false);
     }
 
     const options = {
@@ -482,18 +526,31 @@ function startGeolocationTracking() {
         timeout: 10000,
     };
 
-    const onPosition = (position) => {
-        updateListenerPosition(position.coords.longitude, position.coords.latitude, {
-            centerMap: true,
-        });
-    };
+    return new Promise((resolve) => {
+        let settled = false;
 
-    const onError = (error) => {
-        console.warn("Unable to read smartphone location:", error.message);
-    };
+        const settle = (value) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+        };
 
-    navigator.geolocation.getCurrentPosition(onPosition, onError, options);
-    geolocationWatchId = navigator.geolocation.watchPosition(onPosition, onError, options);
+        const onPosition = (position) => {
+            smartphoneLocationReady = true;
+            updateListenerPosition(position.coords.longitude, position.coords.latitude, {
+                centerMap: true,
+            });
+            settle(true);
+        };
+
+        const onError = (error) => {
+            console.warn("Unable to read smartphone location:", error.message);
+            settle(false);
+        };
+
+        navigator.geolocation.getCurrentPosition(onPosition, onError, options);
+        geolocationWatchId = navigator.geolocation.watchPosition(onPosition, onError, options);
+    });
 }
 
 // ─────────────────────────────────────
@@ -505,7 +562,6 @@ map.on("load", () => {
     new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
     addPlaceMarkers();
     addCenterRect();
-    startGeolocationTracking();
 });
 
 // native compass
@@ -537,13 +593,55 @@ async function sendFiles() {
     // Init
     Pd4Web.init();
 
-    sendCurrentSourceSpatialData();
+    if (!isSmartphone() || smartphoneLocationReady) {
+        sendCurrentSourceSpatialData();
+    }
+}
+
+// ─────────────────────────────────────
+async function startExperience() {
+    const button = document.getElementById("startButton");
+    if (button) button.disabled = true;
+
+    try {
+        setStartStatus("Requesting compass access...");
+        const compassAllowed = await requestCompassPermission();
+        if (compassAllowed) {
+            startListening();
+        } else {
+            console.warn("Compass permission was not granted.");
+        }
+
+        setStartStatus("Requesting location access...");
+        const locationAllowed = await startGeolocationTracking();
+
+        setStartStatus("Starting audio...");
+        await waitForPd4Web();
+        if (!patchIsOpen) {
+            await sendFiles();
+            patchIsOpen = true;
+        }
+
+        if (!locationAllowed) {
+            setStartStatus("Started without location.");
+        } else if (!compassAllowed) {
+            setStartStatus("Started without compass.");
+        } else {
+            setStartStatus("Started.");
+        }
+        window.setTimeout(hideStartPanel, 700);
+    } catch (error) {
+        console.warn("Unable to start sensors or audio:", error);
+        setStartStatus("Could not start. Tap Start again.");
+        if (button) button.disabled = false;
+    }
 }
 
 // ─────────────────────────────────────
 map.on("click", (e) => {
-    current_latitude = e.lngLat.lat;
-    current_longitude = e.lngLat.lng;
+    if (!isSmartphone()) {
+        updateListenerPosition(e.lngLat.lng, e.lngLat.lat);
+    }
     const roomPosition = geoToRoomCoordinates([current_longitude, current_latitude]);
 
     console.log("Clicked position:", {
@@ -558,11 +656,4 @@ map.on("click", (e) => {
             inside: roomPosition.inside,
         },
     });
-    startListening();
-    startGeolocationTracking();
-
-    if (!patchIsOpen) {
-        sendFiles();
-        patchIsOpen = true;
-    }
 });
