@@ -11,15 +11,69 @@ let smartphoneLocationReady = false;
 let compassReady = false;
 let activeCompassEventType = null;
 let lastRenderedCompassHeading = null;
+let listenerIsWalking = false;
+let sceneGainStopTimer = null;
+let lastSmartphoneWalkingPosition = null;
+const POINTER_WALKING_IDLE_MS = 450;
+const SMARTPHONE_WALKING_IDLE_MS = 5000;
+const SMARTPHONE_WALKING_MIN_DISTANCE_METERS = 1.2;
+const SCENE_GAIN_RAMP_MS = 2000;
 
 const audios = [];
 const places = [
-    { id: 1, name: "Place 1", x: -120, y: 70, z: 0 },
-    { id: 2, name: "Place 2", x: 95, y: -55, z: 0 },
-    { id: 3, name: "Place 3", x: -35, y: -105, z: 0 },
-    { id: 4, name: "Place 4", x: 145, y: 85, z: 0 },
-    { id: 5, name: "Place 5", x: 15, y: 20, z: 0 },
+    { id: 1, name: "Place 1", longitude: -46.726689943493, latitude: -23.559419587734 },
+    { id: 2, name: "Place 2", longitude: -46.724582958163, latitude: -23.558296698766 },
+    { id: 3, name: "Place 3", longitude: -46.725856949293, latitude: -23.557847543178 },
+    { id: 4, name: "Place 4", longitude: -46.724092961575, latitude: -23.559554334411 },
+    { id: 5, name: "Place 5", longitude: -46.725366952704, latitude: -23.558970432147 },
 ];
+
+
+
+const movingPlaces = [
+    {
+        id: 1,
+        name: "Moving Place 1",
+        centerLongitude: -46.726885942128,
+        centerLatitude: -23.557982289854,
+        longitude: -46.726885942128,
+        latitude: -23.557982289854,
+        maxDistanceMeters: 45,
+        fullGainDistanceMeters: 12,
+        speedMetersPerSecond: 1.1,
+        algorithm: "perlin",
+        seed: 101,
+    },
+    
+    {
+        id: 2,
+        name: "Moving Place 2",
+        centerLongitude: -46.724190960892,
+        centerLatitude: -23.558072120972,
+        longitude: -46.724190960892,
+        latitude: -23.558072120972,
+        maxDistanceMeters: 55,
+        fullGainDistanceMeters: 18,
+        speedMetersPerSecond: 0.9,
+        algorithm: "random-walk",
+        seed: 202,
+    },
+    {
+        id: 3,
+        name: "Moving Place 3",
+        centerLongitude: -46.725513951681,
+        centerLatitude: -23.559733996646,
+        longitude: -46.725513951681,
+        latitude: -23.559733996646,
+        maxDistanceMeters: 38,
+        fullGainDistanceMeters: 10,
+        speedMetersPerSecond: 5.4,
+        algorithm: "waypoint",
+        seed: 303,
+    },
+];
+
+
 const placeColors = {
     1: "#d7263d",
     2: "#1b998b",
@@ -27,6 +81,18 @@ const placeColors = {
     4: "#2e294e",
     5: "#f3a712",
 };
+const movingPlaceColors = {
+    1: "#0077ff",
+    2: "#8a2be2",
+    3: "#111827",
+};
+const movingPlaceMarkers = new Map();
+const movingPlaceTrails = new Map();
+let lastMovingPlacesTimestamp = null;
+let lastMovingSpatialSentAt = 0;
+let movingPlacesAnimationStarted = false;
+const MOVING_PLACE_TRAIL_LIMIT = 80;
+const MOVING_SPATIAL_SEND_INTERVAL_MS = 50;
 var compassActive = false;
 const map = new maplibregl.Map({
     container: "map",
@@ -118,6 +184,116 @@ function distanceRoomMeters(positionA, positionB) {
 }
 
 // ───────────────────────────────────────
+function clampRoomPositionToRadius(position, center, maxDistanceMeters) {
+    const dx = position.x - center.x;
+    const dy = position.y - center.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if (distance <= maxDistanceMeters || distance === 0) {
+        return position;
+    }
+
+    const scale = maxDistanceMeters / distance;
+    return {
+        x: center.x + dx * scale,
+        y: center.y + dy * scale,
+    };
+}
+
+// ───────────────────────────────────────
+function seededRandom(seed) {
+    const value = Math.sin(seed * 12.9898) * 43758.5453;
+    return value - Math.floor(value);
+}
+
+// ───────────────────────────────────────
+function smoothstep(value) {
+    return value * value * (3 - 2 * value);
+}
+
+// ───────────────────────────────────────
+function valueNoise(seed, time) {
+    const left = Math.floor(time);
+    const fraction = time - left;
+    const a = seededRandom(seed + left * 17.17) * 2 - 1;
+    const b = seededRandom(seed + (left + 1) * 17.17) * 2 - 1;
+    return a + (b - a) * smoothstep(fraction);
+}
+
+// ───────────────────────────────────────
+function randomPointInCircle(center, radiusMeters, seed) {
+    const angle = seededRandom(seed) * Math.PI * 2;
+    const radius = Math.sqrt(seededRandom(seed + 91.7)) * radiusMeters;
+    return {
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius,
+    };
+}
+
+// ───────────────────────────────────────
+function initializeMovingPlaceState(place) {
+    if (place.state) return place.state;
+
+    const center = geoToRoomCoordinates([place.centerLongitude, place.centerLatitude]);
+    place.state = {
+        center,
+        position: geoToRoomCoordinates([place.longitude, place.latitude]),
+        heading: seededRandom(place.seed) * Math.PI * 2,
+        waypoint: randomPointInCircle(center, place.maxDistanceMeters, place.seed + 200),
+        waypointSeed: place.seed + 300,
+        trail: [[place.longitude, place.latitude]],
+    };
+
+    return place.state;
+}
+
+// ───────────────────────────────────────
+function updateMovingPlacePosition(place, elapsedSeconds, deltaSeconds) {
+    const state = initializeMovingPlaceState(place);
+    const speed = place.speedMetersPerSecond;
+
+    if (place.algorithm === "perlin") {
+        const time = elapsedSeconds * Math.max(0.05, speed) * 0.08;
+        const position = {
+            x: state.center.x + valueNoise(place.seed, time) * place.maxDistanceMeters,
+            y: state.center.y + valueNoise(place.seed + 1000, time + 41.3) * place.maxDistanceMeters,
+        };
+        state.position = clampRoomPositionToRadius(position, state.center, place.maxDistanceMeters);
+    } else if (place.algorithm === "random-walk") {
+        const turn = valueNoise(place.seed + 500, elapsedSeconds * 0.7) * Math.PI * 0.9;
+        state.heading += turn * deltaSeconds;
+        const position = {
+            x: state.position.x + Math.cos(state.heading) * speed * deltaSeconds,
+            y: state.position.y + Math.sin(state.heading) * speed * deltaSeconds,
+        };
+        state.position = clampRoomPositionToRadius(position, state.center, place.maxDistanceMeters);
+
+        if (distanceRoomMeters(state.position, state.center) >= place.maxDistanceMeters * 0.98) {
+            state.heading += Math.PI * 0.8;
+        }
+    } else if (place.algorithm === "waypoint") {
+        const distanceToWaypoint = distanceRoomMeters(state.position, state.waypoint);
+
+        if (distanceToWaypoint < 1) {
+            state.waypointSeed += 1;
+            state.waypoint = randomPointInCircle(state.center, place.maxDistanceMeters, state.waypointSeed);
+        } else {
+            const travelDistance = Math.min(speed * deltaSeconds, distanceToWaypoint);
+            state.position = {
+                x: state.position.x + ((state.waypoint.x - state.position.x) / distanceToWaypoint) * travelDistance,
+                y: state.position.y + ((state.waypoint.y - state.position.y) / distanceToWaypoint) * travelDistance,
+            };
+        }
+    }
+
+    const [longitude, latitude] = roomToGeoCoordinates(state.position);
+    place.longitude = longitude;
+    place.latitude = latitude;
+    state.trail.push([longitude, latitude]);
+    if (state.trail.length > MOVING_PLACE_TRAIL_LIMIT) state.trail.shift();
+}
+
+// ───────────────────────────────────────
 function compassAzimuthBetween(fromLng, fromLat, toLng, toLat) {
     const toRad = (deg) => (deg * Math.PI) / 180;
     const toDeg = (rad) => (rad * 180) / Math.PI;
@@ -171,18 +347,159 @@ function addPlaceMarkers() {
         const markerColor = placeColors[place.id];
 
         new maplibregl.Marker({ color: markerColor })
-            .setLngLat(roomToGeoCoordinates(place))
+            .setLngLat([place.longitude, place.latitude])
             .setPopup(
                 new maplibregl.Popup({ offset: 25 }).setHTML(`
                     <b>${place.name}</b><br>
                     Source: ${place.id}<br>
-                    X: ${place.x}<br>
-                    Y: ${place.y}<br>
-                    Z: ${place.z}
+                    Lat: ${place.latitude.toFixed(6)}<br>
+                    Lon: ${place.longitude.toFixed(6)}
                 `),
             )
             .addTo(map);
     });
+}
+
+// ───────────────────────────────────────
+function getMovingPlaceRadiusData(place) {
+    const center = geoToRoomCoordinates([place.centerLongitude, place.centerLatitude]);
+    const coordinates = [];
+    const steps = 72;
+
+    for (let i = 0; i <= steps; i += 1) {
+        const angle = (i / steps) * Math.PI * 2;
+        coordinates.push(
+            roomToGeoCoordinates({
+                x: center.x + Math.cos(angle) * place.maxDistanceMeters,
+                y: center.y + Math.sin(angle) * place.maxDistanceMeters,
+            }),
+        );
+    }
+
+    return {
+        type: "Feature",
+        properties: {},
+        geometry: {
+            type: "LineString",
+            coordinates,
+        },
+    };
+}
+
+// ───────────────────────────────────────
+function getMovingPlaceTrailData(place) {
+    const state = initializeMovingPlaceState(place);
+
+    return {
+        type: "Feature",
+        properties: {},
+        geometry: {
+            type: "LineString",
+            coordinates: state.trail,
+        },
+    };
+}
+
+// ───────────────────────────────────────
+function addMovingPlaceMarkers() {
+    movingPlaces.forEach((place) => {
+        initializeMovingPlaceState(place);
+
+        const markerColor = movingPlaceColors[place.id] ?? "#111827";
+        const marker = new maplibregl.Marker({ color: markerColor })
+            .setLngLat([place.longitude, place.latitude])
+            .setPopup(
+                new maplibregl.Popup({ offset: 25 }).setHTML(`
+                    <b>${place.name}</b><br>
+                    Receiver: source${place.id}-moving-gain / source${place.id}-moving-azi<br>
+                    Algorithm: ${place.algorithm}<br>
+                    Speed: ${place.speedMetersPerSecond} m/s<br>
+                    Full gain: ${place.fullGainDistanceMeters} m<br>
+                    Max radius: ${place.maxDistanceMeters} m
+                `),
+            )
+            .addTo(map);
+
+        movingPlaceMarkers.set(place.id, marker);
+
+        const radiusSourceId = `moving-place-${place.id}-radius`;
+        const radiusLayerId = `moving-place-${place.id}-radius-line`;
+        map.addSource(radiusSourceId, {
+            type: "geojson",
+            data: getMovingPlaceRadiusData(place),
+        });
+        map.addLayer({
+            id: radiusLayerId,
+            type: "line",
+            source: radiusSourceId,
+            paint: {
+                "line-color": markerColor,
+                "line-opacity": 0.35,
+                "line-width": 2,
+                "line-dasharray": [2, 2],
+            },
+        });
+
+        const trailSourceId = `moving-place-${place.id}-trail`;
+        const trailLayerId = `moving-place-${place.id}-trail-line`;
+        map.addSource(trailSourceId, {
+            type: "geojson",
+            data: getMovingPlaceTrailData(place),
+        });
+        map.addLayer({
+            id: trailLayerId,
+            type: "line",
+            source: trailSourceId,
+            paint: {
+                "line-color": markerColor,
+                "line-opacity": 0.75,
+                "line-width": 3,
+            },
+        });
+
+        movingPlaceTrails.set(place.id, trailSourceId);
+    });
+}
+
+// ───────────────────────────────────────
+function updateMovingPlaceMarkers() {
+    movingPlaces.forEach((place) => {
+        movingPlaceMarkers.get(place.id)?.setLngLat([place.longitude, place.latitude]);
+        const trailSourceId = movingPlaceTrails.get(place.id);
+        if (trailSourceId) map.getSource(trailSourceId)?.setData(getMovingPlaceTrailData(place));
+    });
+}
+
+// ───────────────────────────────────────
+function startMovingPlacesAnimation(delayMs = 0) {
+    if (movingPlacesAnimationStarted) return;
+    movingPlacesAnimationStarted = true;
+
+    window.setTimeout(() => {
+        lastMovingPlacesTimestamp = null;
+        window.requestAnimationFrame(animateMovingPlaces);
+    }, delayMs);
+}
+
+// ───────────────────────────────────────
+function animateMovingPlaces(timestamp) {
+    if (lastMovingPlacesTimestamp === null) {
+        lastMovingPlacesTimestamp = timestamp;
+    }
+
+    const deltaSeconds = Math.min((timestamp - lastMovingPlacesTimestamp) / 1000, 0.1);
+    const elapsedSeconds = timestamp / 1000;
+    lastMovingPlacesTimestamp = timestamp;
+
+    movingPlaces.forEach((place) => updateMovingPlacePosition(place, elapsedSeconds, deltaSeconds));
+    updateMovingPlaceMarkers();
+
+    if (timestamp - lastMovingSpatialSentAt >= MOVING_SPATIAL_SEND_INTERVAL_MS) {
+        lastMovingSpatialSentAt = timestamp;
+        sendCurrentSourceSpatialData();
+    }
+
+    window.requestAnimationFrame(animateMovingPlaces);
 }
 
 // ───────────────────────────────────────
@@ -328,11 +645,26 @@ function attenuation(distanceMeters) {
 }
 
 // ─────────────────────────────────────
+function attenuationWithFullGainDistance(distanceMeters, fullGainDistanceMeters) {
+    if (distanceMeters <= fullGainDistanceMeters) return 1;
+    return attenuation(distanceMeters - fullGainDistanceMeters);
+}
+
+// ─────────────────────────────────────
 function sendSourceAzimuth(sourceNumber, sourceLng, sourceLat) {
     if (!Pd4Web) return;
     const compassAzimuth = compassAzimuthBetween(current_longitude, current_latitude, sourceLng, sourceLat);
     const azimuth = normalize(compassAzimuth - currentCompassHeading);
     Pd4Web.sendFloat(`source${sourceNumber}-azi`, azimuth);
+}
+
+// ─────────────────────────────────────
+function sendMovingSourceAzimuth(sourceNumber, sourceLng, sourceLat) {
+    if (!Pd4Web) return;
+    const compassAzimuth = compassAzimuthBetween(current_longitude, current_latitude, sourceLng, sourceLat);
+    const azimuth = normalize(compassAzimuth - currentCompassHeading);
+    //console.log(azimuth);
+    Pd4Web.sendFloat(`source${sourceNumber}-moving-azi`, azimuth);
 }
 
 // ─────────────────────────────────────
@@ -343,14 +675,82 @@ function sendSourceGain(sourceNumber, gain) {
 }
 
 // ─────────────────────────────────────
+function sendMovingSourceGain(sourceNumber, gain) {
+    if (!Pd4Web) return;
+    Pd4Web.sendFloat(`source${sourceNumber}-moving-gain`, gain);
+}
+
+// ─────────────────────────────────────
+function sendSceneGain(value) {
+    if (!Pd4Web) return;
+
+    ["scenegain", "ganho-cena"].forEach((receiver) => {
+        if (typeof Pd4Web.sendList === "function") {
+            try {
+                Pd4Web.sendList(receiver, [value, SCENE_GAIN_RAMP_MS]);
+                return;
+            } catch (error) {
+                console.warn(`Unable to send list to ${receiver}:`, error);
+            }
+        }
+
+        if (typeof Pd4Web.sendMessage === "function") {
+            try {
+                Pd4Web.sendMessage(receiver, [value, SCENE_GAIN_RAMP_MS]);
+                return;
+            } catch (error) {
+                console.warn(`Unable to send message to ${receiver}:`, error);
+            }
+        }
+
+        Pd4Web.sendFloat(receiver, value);
+    });
+}
+
+// ─────────────────────────────────────
+function setWalkingState(isWalking) {
+    if (listenerIsWalking === isWalking) return;
+    listenerIsWalking = isWalking;
+    sendSceneGain(isWalking ? 1 : 0);
+}
+
+// ─────────────────────────────────────
+function markWalking(timeoutMs) {
+    setWalkingState(true);
+    window.clearTimeout(sceneGainStopTimer);
+    sceneGainStopTimer = window.setTimeout(() => setWalkingState(false), timeoutMs);
+}
+
+// ─────────────────────────────────────
+function updateSmartphoneWalkingState(lng, lat) {
+    const nextPosition = { lng, lat };
+
+    if (lastSmartphoneWalkingPosition === null) {
+        lastSmartphoneWalkingPosition = nextPosition;
+        setWalkingState(false);
+        return;
+    }
+
+    const movedMeters = distanceMeters(
+        lastSmartphoneWalkingPosition.lat,
+        lastSmartphoneWalkingPosition.lng,
+        lat,
+        lng,
+    );
+
+    if (movedMeters >= SMARTPHONE_WALKING_MIN_DISTANCE_METERS) {
+        lastSmartphoneWalkingPosition = nextPosition;
+        markWalking(SMARTPHONE_WALKING_IDLE_MS);
+    }
+}
+
+// ─────────────────────────────────────
 function sendCurrentSourceSpatialData() {
     if (!Pd4Web) return;
-    const roomPosition = geoToRoomCoordinates([current_longitude, current_latitude]);
 
     places.forEach((place) => {
-        const [sourceLng, sourceLat] = roomToGeoCoordinates(place);
-        const dist = distanceRoomMeters(roomPosition, place);
-        sendSourceAzimuth(place.id, sourceLng, sourceLat);
+        const dist = distanceMeters(place.latitude, place.longitude, current_latitude, current_longitude);
+        sendSourceAzimuth(place.id, place.longitude, place.latitude);
         sendSourceGain(place.id, attenuation(dist));
     });
 
@@ -358,6 +758,12 @@ function sendCurrentSourceSpatialData() {
         const dist = distanceMeters(audio.latitude, audio.longitude, current_latitude, current_longitude);
         sendSourceAzimuth(audio.sourceNumber, audio.longitude, audio.latitude);
         sendSourceGain(audio.sourceNumber, attenuation(dist));
+    });
+
+    movingPlaces.forEach((place) => {
+        const dist = distanceMeters(place.latitude, place.longitude, current_latitude, current_longitude);
+        sendMovingSourceAzimuth(place.id, place.longitude, place.latitude);
+        sendMovingSourceGain(place.id, attenuationWithFullGainDistance(dist, place.fullGainDistanceMeters));
     });
 }
 
@@ -426,7 +832,10 @@ function smoothCompassHeading(targetHeading) {
 
 // ─────────────────────────────────────
 function rotateMapToCompass(heading) {
-    if (lastRenderedCompassHeading !== null && Math.abs(shortestAngleDelta(lastRenderedCompassHeading, heading)) < 0.35) {
+    if (
+        lastRenderedCompassHeading !== null &&
+        Math.abs(shortestAngleDelta(lastRenderedCompassHeading, heading)) < 0.35
+    ) {
         return;
     }
 
@@ -532,6 +941,10 @@ function updateListenerPosition(lng, lat, options = {}) {
     current_longitude = lng;
     marker.setLngLat([lng, lat]);
 
+    if (options.walking) {
+        markWalking(options.walkingTimeoutMs ?? POINTER_WALKING_IDLE_MS);
+    }
+
     if (options.centerMap) {
         map.easeTo({ center: [lng, lat], duration: 500 });
     }
@@ -568,6 +981,7 @@ function startGeolocationTracking() {
 
         const onPosition = (position) => {
             smartphoneLocationReady = true;
+            updateSmartphoneWalkingState(position.coords.longitude, position.coords.latitude);
             updateListenerPosition(position.coords.longitude, position.coords.latitude, {
                 centerMap: true,
             });
@@ -586,12 +1000,15 @@ function startGeolocationTracking() {
 
 // ─────────────────────────────────────
 map.on("load", () => {
-    const newmarker = new maplibregl.Marker();
-    marker.setLngLat(map.getCenter()).addTo(map);
+    const center = map.getCenter();
+    current_longitude = center.lng;
+    current_latitude = center.lat;
+    marker.setLngLat(center).addTo(map);
 
     const soundPosition = moveNorth(CENTER_MAP, 50);
     new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
     addPlaceMarkers();
+    addMovingPlaceMarkers();
     addCenterRect();
 });
 
@@ -601,7 +1018,10 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 // ─────────────────────────────────────
 map.on("mousemove", (e) => {
     if (isSmartphone()) return;
-    updateListenerPosition(e.lngLat.lng, e.lngLat.lat);
+    updateListenerPosition(e.lngLat.lng, e.lngLat.lat, {
+        walking: true,
+        walkingTimeoutMs: POINTER_WALKING_IDLE_MS,
+    });
 });
 
 // ─────────────────────────────────────
@@ -623,10 +1043,12 @@ async function sendFiles() {
 
     // Init
     Pd4Web.init();
+    startMovingPlacesAnimation(2000);
 
     if (!isSmartphone() || smartphoneLocationReady) {
         sendCurrentSourceSpatialData();
     }
+    sendSceneGain(listenerIsWalking ? 1 : 0);
 }
 
 // ─────────────────────────────────────
