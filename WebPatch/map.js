@@ -22,53 +22,44 @@ const SCENE_GAIN_RAMP_MS = 2000;
 
 const audios = [];
 const places = [
-    { id: 1, name: "Place 1", longitude: -46.726689943493, latitude: -23.559419587734 },
-    { id: 2, name: "Place 2", longitude: -46.724582958163, latitude: -23.558296698766 },
-    { id: 3, name: "Place 3", longitude: -46.725856949293, latitude: -23.557847543178 },
-    { id: 4, name: "Place 4", longitude: -46.724092961575, latitude: -23.559554334411 },
-    { id: 5, name: "Place 5", longitude: -46.725366952704, latitude: -23.558970432147 },
+    { id: 1, name: "Place 1", longitude: -46.72484612918464, latitude: -23.55742778145293 },
+    { id: 2, name: "Place 2", longitude: -46.724521677227045, latitude: -23.558035883056476 },
+    { id: 3, name: "Place 3", longitude: -46.72452543276725, latitude: -23.55880586198643 },
+    { id: 4, name: "Place 4", longitude: -46.72407938302487, latitude: -23.559550421100212 },
+    { id: 5, name: "Place 5", longitude: -46.724981440415434, latitude: -23.55982230577682 },
+    { id: 6, name: "Place 6", longitude: -46.7262030794669, latitude: -23.559401386222163 },
+    { id: 7, name: "Place 7", longitude: -46.72687904779477, latitude: -23.559106613765778 },
+    { id: 8, name: "Place 8", longitude: -46.72683432863636, latitude: -23.55800169887131 },
+    { id: 9, name: "Place 9", longitude: -46.725510185084374, latitude: -23.557207930894776 },
 ];
 
 const movingPlaces = [
+    // ONIBUS
     {
         id: 1,
         name: "Moving Place 1",
-        centerLongitude: -46.726885942128,
-        centerLatitude: -23.557982289854,
-        longitude: -46.726885942128,
-        latitude: -23.557982289854,
-        maxDistanceMeters: 80,
+        centerLongitude: -46.72731078995591,
+        centerLatitude: -23.558421622228266,
+        longitude: -46.72731078995591,
+        latitude: -23.558421622228266,
+        maxDistanceMeters: 120,
         fullGainDistanceMeters: 12,
         speedMetersPerSecond: 1.1,
         algorithm: "perlin",
         seed: 101,
     },
-
     {
         id: 2,
         name: "Moving Place 2",
-        centerLongitude: -46.724190960892,
-        centerLatitude: -23.558072120972,
-        longitude: -46.724190960892,
-        latitude: -23.558072120972,
+        centerLongitude: -46.72498378006918,
+        centerLatitude: -23.557662208748084,
+        longitude: -46.72498378006918,
+        latitude: -23.557662208748084,
         maxDistanceMeters: 120,
-        fullGainDistanceMeters: 18,
-        speedMetersPerSecond: 0.9,
-        algorithm: "random-walk",
-        seed: 202,
-    },
-    {
-        id: 3,
-        name: "Moving Place 3",
-        centerLongitude: -46.725513951681,
-        centerLatitude: -23.559733996646,
-        longitude: -46.725513951681,
-        latitude: -23.559733996646,
-        maxDistanceMeters: 150,
-        fullGainDistanceMeters: 10,
-        speedMetersPerSecond: 5.4,
-        algorithm: "waypoint",
-        seed: 303,
+        fullGainDistanceMeters: 12,
+        speedMetersPerSecond: 1.1,
+        algorithm: "perlin",
+        seed: 101,
     },
 ];
 
@@ -84,6 +75,7 @@ const movingPlaceColors = {
     2: "#8a2be2",
     3: "#111827",
 };
+
 const movingPlaceMarkers = new Map();
 const movingPlaceTrails = new Map();
 let lastMovingPlacesTimestamp = null;
@@ -1039,7 +1031,7 @@ map.on("load", () => {
     marker.setLngLat(center).addTo(map);
 
     const soundPosition = moveNorth(CENTER_MAP, 50);
-    new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
+    //new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
     addPlaceMarkers();
     addMovingPlaceMarkers();
     addCenterRect();

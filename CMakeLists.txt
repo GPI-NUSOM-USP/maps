@@ -98,8 +98,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/Pd4Web/Externals/earplug~.cmake")
 # Project Externals Libraries
 target_link_libraries(pd4web PRIVATE 
                                 pdlua
-                                mar_tilde
-                                earplug_tilde)
+                                earplug_tilde
+                                mar_tilde)
 
 # Preload Files
 get_target_property(EMCC_LINK_FLAGS pd4web LINK_FLAGS)
