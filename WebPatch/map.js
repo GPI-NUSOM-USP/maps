@@ -14,6 +14,7 @@ let lastRenderedCompassHeading = null;
 let listenerIsWalking = false;
 let sceneGainStopTimer = null;
 let lastSmartphoneWalkingPosition = null;
+let screenWakeLock = null;
 const POINTER_WALKING_IDLE_MS = 450;
 const SMARTPHONE_WALKING_IDLE_MS = 5000;
 const SMARTPHONE_WALKING_MIN_DISTANCE_METERS = 1.2;
@@ -128,6 +129,46 @@ function isSmartphone() {
     const coarsePointer = window.matchMedia?.("(pointer: coarse)")?.matches;
     const narrowScreen = window.matchMedia?.("(max-width: 900px)")?.matches;
     return coarsePointer && narrowScreen && navigator.maxTouchPoints > 0;
+}
+
+// ───────────────────────────────────────
+async function requestFullscreen() {
+    if (document.fullscreenElement) return true;
+
+    const element = document.documentElement;
+    if (typeof element.requestFullscreen !== "function") {
+        console.warn("Fullscreen is not available in this browser.");
+        return false;
+    }
+
+    await element.requestFullscreen();
+    return true;
+}
+
+// ───────────────────────────────────────
+async function requestScreenWakeLock() {
+    if (!navigator.wakeLock || typeof navigator.wakeLock.request !== "function") {
+        console.warn("Screen Wake Lock is not available in this browser.");
+        return false;
+    }
+
+    screenWakeLock = await navigator.wakeLock.request("screen");
+    screenWakeLock.addEventListener("release", () => {
+        screenWakeLock = null;
+    });
+    return true;
+}
+
+// ───────────────────────────────────────
+async function requestSmartphoneFullscreenAndWakeLock() {
+    if (!isSmartphone()) return;
+
+    try {
+        await requestFullscreen();
+        await requestScreenWakeLock();
+    } catch (error) {
+        console.warn("Unable to request fullscreen or screen wake lock:", error);
+    }
 }
 
 // ───────────────────────────────────────
@@ -1049,6 +1090,9 @@ async function startExperience() {
     if (button) button.disabled = true;
 
     try {
+        setStartStatus("Requesting fullscreen...");
+        await requestSmartphoneFullscreenAndWakeLock();
+
         setStartStatus("Requesting compass access...");
         const compassAllowed = await requestCompassPermission();
         if (compassAllowed) {
