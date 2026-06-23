@@ -28,8 +28,6 @@ const places = [
     { id: 5, name: "Place 5", longitude: -46.725366952704, latitude: -23.558970432147 },
 ];
 
-
-
 const movingPlaces = [
     {
         id: 1,
@@ -38,13 +36,13 @@ const movingPlaces = [
         centerLatitude: -23.557982289854,
         longitude: -46.726885942128,
         latitude: -23.557982289854,
-        maxDistanceMeters: 45,
+        maxDistanceMeters: 80,
         fullGainDistanceMeters: 12,
         speedMetersPerSecond: 1.1,
         algorithm: "perlin",
         seed: 101,
     },
-    
+
     {
         id: 2,
         name: "Moving Place 2",
@@ -52,7 +50,7 @@ const movingPlaces = [
         centerLatitude: -23.558072120972,
         longitude: -46.724190960892,
         latitude: -23.558072120972,
-        maxDistanceMeters: 55,
+        maxDistanceMeters: 120,
         fullGainDistanceMeters: 18,
         speedMetersPerSecond: 0.9,
         algorithm: "random-walk",
@@ -65,14 +63,13 @@ const movingPlaces = [
         centerLatitude: -23.559733996646,
         longitude: -46.725513951681,
         latitude: -23.559733996646,
-        maxDistanceMeters: 38,
+        maxDistanceMeters: 150,
         fullGainDistanceMeters: 10,
         speedMetersPerSecond: 5.4,
         algorithm: "waypoint",
         seed: 303,
     },
 ];
-
 
 const placeColors = {
     1: "#d7263d",
@@ -684,7 +681,7 @@ function sendMovingSourceGain(sourceNumber, gain) {
 function sendSceneGain(value) {
     if (!Pd4Web) return;
 
-    ["scenegain", "ganho-cena"].forEach((receiver) => {
+    ["scenegain"].forEach((receiver) => {
         if (typeof Pd4Web.sendList === "function") {
             try {
                 Pd4Web.sendList(receiver, [value, SCENE_GAIN_RAMP_MS]);
@@ -731,12 +728,7 @@ function updateSmartphoneWalkingState(lng, lat) {
         return;
     }
 
-    const movedMeters = distanceMeters(
-        lastSmartphoneWalkingPosition.lat,
-        lastSmartphoneWalkingPosition.lng,
-        lat,
-        lng,
-    );
+    const movedMeters = distanceMeters(lastSmartphoneWalkingPosition.lat, lastSmartphoneWalkingPosition.lng, lat, lng);
 
     if (movedMeters >= SMARTPHONE_WALKING_MIN_DISTANCE_METERS) {
         lastSmartphoneWalkingPosition = nextPosition;
