@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-        <title>MapLibre Fullscreen Map</title>
+        <title>Mapa sonoro da Praça do Relógio</title>
 
         <script src="pd4web.threads.js"></script>
         <script src="pd4web.js"></script>
@@ -81,6 +81,31 @@
                 color: #1f2937;
                 font: 14px/1.3 system-ui, sans-serif;
             }
+
+            .walking-overlay {
+                position: fixed;
+                inset: 0;
+                z-index: 800;
+                display: grid;
+                place-items: center;
+                padding: 24px;
+                box-sizing: border-box;
+                background: rgba(0, 0, 0, 0.55);
+                color: white;
+                text-align: center;
+                pointer-events: none;
+            }
+
+            .walking-overlay[hidden] {
+                display: none;
+            }
+
+            .walking-overlay p {
+                margin: 0;
+                max-width: 420px;
+                font: 700 clamp(22px, 5vw, 36px) / 1.2 system-ui, sans-serif;
+                text-wrap: balance;
+            }
         </style>
     </head>
 
@@ -94,14 +119,18 @@
         <div id="map"></div>
         <script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
 
+        <div id="walkingOverlay" class="walking-overlay" role="status" aria-live="polite" hidden>
+            <p id="walkingOverlayMessage">Você precisa caminhar para ouvir os sons</p>
+        </div>
+
         <div id="startPanel" class="start-panel">
-            <button id="startButton" type="button" onclick="startExperience()">Start</button>
-            <span id="startStatus">Start audio, location, and compass.</span>
+            <button id="startButton" type="button" onclick="startExperience()">Iniciar</button>
+            <span id="startStatus">Inicie o áudio, a localização e a bússola.</span>
         </div>
 
         <div id="audioOverlay" class="overlay" style="display: none">
             <div class="modal">
-                <h3>New Áudio</h3>
+                <h3>Novo áudio</h3>
 
                 <label>Arquivo MP3 ou WAV</label>
                 <input type="file" id="audioFile" accept=".mp3,.wav,audio/mpeg,audio/wav" />
@@ -115,7 +144,7 @@
                 <label>Longitude</label>
                 <input type="number" id="longitude" step="any" />
 
-                <label>Source Number</label>
+                <label>Número da fonte</label>
                 <input type="number" id="sourceNumber" />
 
                 <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px">

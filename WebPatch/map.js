@@ -3,8 +3,8 @@ var current_latitude = 0;
 var current_longitude = 0;
 var patchIsOpen = false;
 let CENTER_MAP = [-46.725513951680966, -23.558790769911838];
-const CENTER_RECT_X_METERS = 400;
-const CENTER_RECT_Y_METERS = 300;
+const CENTER_RECT_X_METERS = 800;
+const CENTER_RECT_Y_METERS = 600;
 let geolocationWatchId = null;
 let currentCompassHeading = 0;
 let smartphoneLocationReady = false;
@@ -18,7 +18,8 @@ let screenWakeLock = null;
 const POINTER_WALKING_IDLE_MS = 450;
 const SMARTPHONE_WALKING_IDLE_MS = 5000;
 const SMARTPHONE_WALKING_MIN_DISTANCE_METERS = 1.2;
-const SCENE_GAIN_RAMP_MS = 2000;
+const SCENE_GAIN_FADE_IN_MS = 2000;
+const SCENE_GAIN_FADE_OUT_MS = 5000;
 
 const audios = [];
 const places = [
@@ -63,25 +64,9 @@ const movingPlaces = [
     },
 ];
 
-const placeColors = {
-    1: "#d7263d",
-    2: "#1b998b",
-    3: "#f46036",
-    4: "#2e294e",
-    5: "#f3a712",
-};
-const movingPlaceColors = {
-    1: "#0077ff",
-    2: "#8a2be2",
-    3: "#111827",
-};
-
-const movingPlaceMarkers = new Map();
-const movingPlaceTrails = new Map();
 let lastMovingPlacesTimestamp = null;
 let lastMovingSpatialSentAt = 0;
 let movingPlacesAnimationStarted = false;
-const MOVING_PLACE_TRAIL_LIMIT = 80;
 const MOVING_SPATIAL_SEND_INTERVAL_MS = 50;
 var compassActive = false;
 const map = new maplibregl.Map({
@@ -161,22 +146,6 @@ async function requestSmartphoneFullscreenAndWakeLock() {
     } catch (error) {
         console.warn("Unable to request fullscreen or screen wake lock:", error);
     }
-}
-
-// ───────────────────────────────────────
-function getRectAroundCenter([lng, lat], widthMeters, heightMeters) {
-    const metersPerDegreeLat = 111320;
-    const metersPerDegreeLng = metersPerDegreeLat * Math.cos((lat * Math.PI) / 180);
-    const halfLng = widthMeters / 2 / metersPerDegreeLng;
-    const halfLat = heightMeters / 2 / metersPerDegreeLat;
-
-    return [
-        [lng - halfLng, lat + halfLat],
-        [lng + halfLng, lat + halfLat],
-        [lng + halfLng, lat - halfLat],
-        [lng - halfLng, lat - halfLat],
-        [lng - halfLng, lat + halfLat],
-    ];
 }
 
 // ───────────────────────────────────────
@@ -271,7 +240,6 @@ function initializeMovingPlaceState(place) {
         heading: seededRandom(place.seed) * Math.PI * 2,
         waypoint: randomPointInCircle(center, place.maxDistanceMeters, place.seed + 200),
         waypointSeed: place.seed + 300,
-        trail: [[place.longitude, place.latitude]],
     };
 
     return place.state;
@@ -319,8 +287,6 @@ function updateMovingPlacePosition(place, elapsedSeconds, deltaSeconds) {
     const [longitude, latitude] = roomToGeoCoordinates(state.position);
     place.longitude = longitude;
     place.latitude = latitude;
-    state.trail.push([longitude, latitude]);
-    if (state.trail.length > MOVING_PLACE_TRAIL_LIMIT) state.trail.shift();
 }
 
 // ───────────────────────────────────────
@@ -333,171 +299,6 @@ function compassAzimuthBetween(fromLng, fromLat, toLng, toLat) {
     const y = Math.sin(deltaLng) * Math.cos(endLat);
     const x = Math.cos(startLat) * Math.sin(endLat) - Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
     return normalize(toDeg(Math.atan2(y, x)));
-}
-
-// ───────────────────────────────────────
-function getCenterRectData() {
-    return {
-        type: "Feature",
-        properties: {},
-        geometry: {
-            type: "LineString",
-            coordinates: getRectAroundCenter(CENTER_MAP, CENTER_RECT_X_METERS, CENTER_RECT_Y_METERS),
-        },
-    };
-}
-
-// ───────────────────────────────────────
-function addCenterRect() {
-    map.addSource("center-map-rect", {
-        type: "geojson",
-        data: getCenterRectData(),
-    });
-
-    map.addLayer({
-        id: "center-map-rect-outline",
-        type: "line",
-        source: "center-map-rect",
-        paint: {
-            "line-color": "#ff0000",
-            "line-width": 2,
-        },
-    });
-}
-
-// ───────────────────────────────────────
-function updateCenterRect() {
-    const source = map.getSource("center-map-rect");
-    if (source) source.setData(getCenterRectData());
-}
-
-// ───────────────────────────────────────
-function addPlaceMarkers() {
-    places.forEach((place) => {
-        const markerColor = placeColors[place.id];
-
-        new maplibregl.Marker({ color: markerColor })
-            .setLngLat([place.longitude, place.latitude])
-            .setPopup(
-                new maplibregl.Popup({ offset: 25 }).setHTML(`
-                    <b>${place.name}</b><br>
-                    Source: ${place.id}<br>
-                    Lat: ${place.latitude.toFixed(6)}<br>
-                    Lon: ${place.longitude.toFixed(6)}
-                `),
-            )
-            .addTo(map);
-    });
-}
-
-// ───────────────────────────────────────
-function getMovingPlaceRadiusData(place) {
-    const center = geoToRoomCoordinates([place.centerLongitude, place.centerLatitude]);
-    const coordinates = [];
-    const steps = 72;
-
-    for (let i = 0; i <= steps; i += 1) {
-        const angle = (i / steps) * Math.PI * 2;
-        coordinates.push(
-            roomToGeoCoordinates({
-                x: center.x + Math.cos(angle) * place.maxDistanceMeters,
-                y: center.y + Math.sin(angle) * place.maxDistanceMeters,
-            }),
-        );
-    }
-
-    return {
-        type: "Feature",
-        properties: {},
-        geometry: {
-            type: "LineString",
-            coordinates,
-        },
-    };
-}
-
-// ───────────────────────────────────────
-function getMovingPlaceTrailData(place) {
-    const state = initializeMovingPlaceState(place);
-
-    return {
-        type: "Feature",
-        properties: {},
-        geometry: {
-            type: "LineString",
-            coordinates: state.trail,
-        },
-    };
-}
-
-// ───────────────────────────────────────
-function addMovingPlaceMarkers() {
-    movingPlaces.forEach((place) => {
-        initializeMovingPlaceState(place);
-
-        const markerColor = movingPlaceColors[place.id] ?? "#111827";
-        const marker = new maplibregl.Marker({ color: markerColor })
-            .setLngLat([place.longitude, place.latitude])
-            .setPopup(
-                new maplibregl.Popup({ offset: 25 }).setHTML(`
-                    <b>${place.name}</b><br>
-                    Receiver: source${place.id}-moving-gain / source${place.id}-moving-azi<br>
-                    Algorithm: ${place.algorithm}<br>
-                    Speed: ${place.speedMetersPerSecond} m/s<br>
-                    Full gain: ${place.fullGainDistanceMeters} m<br>
-                    Max radius: ${place.maxDistanceMeters} m
-                `),
-            )
-            .addTo(map);
-
-        movingPlaceMarkers.set(place.id, marker);
-
-        const radiusSourceId = `moving-place-${place.id}-radius`;
-        const radiusLayerId = `moving-place-${place.id}-radius-line`;
-        map.addSource(radiusSourceId, {
-            type: "geojson",
-            data: getMovingPlaceRadiusData(place),
-        });
-        map.addLayer({
-            id: radiusLayerId,
-            type: "line",
-            source: radiusSourceId,
-            paint: {
-                "line-color": markerColor,
-                "line-opacity": 0.35,
-                "line-width": 2,
-                "line-dasharray": [2, 2],
-            },
-        });
-
-        const trailSourceId = `moving-place-${place.id}-trail`;
-        const trailLayerId = `moving-place-${place.id}-trail-line`;
-        map.addSource(trailSourceId, {
-            type: "geojson",
-            data: getMovingPlaceTrailData(place),
-        });
-        map.addLayer({
-            id: trailLayerId,
-            type: "line",
-            source: trailSourceId,
-            paint: {
-                "line-color": markerColor,
-                "line-opacity": 0.75,
-                "line-width": 3,
-            },
-        });
-
-        movingPlaceTrails.set(place.id, trailSourceId);
-    });
-}
-
-// ───────────────────────────────────────
-function updateMovingPlaceMarkers() {
-    movingPlaces.forEach((place) => {
-        movingPlaceMarkers.get(place.id)?.setLngLat([place.longitude, place.latitude]);
-        const trailSourceId = movingPlaceTrails.get(place.id);
-        if (trailSourceId) map.getSource(trailSourceId)?.setData(getMovingPlaceTrailData(place));
-    });
 }
 
 // ───────────────────────────────────────
@@ -522,7 +323,6 @@ function animateMovingPlaces(timestamp) {
     lastMovingPlacesTimestamp = timestamp;
 
     movingPlaces.forEach((place) => updateMovingPlacePosition(place, elapsedSeconds, deltaSeconds));
-    updateMovingPlaceMarkers();
 
     if (timestamp - lastMovingSpatialSentAt >= MOVING_SPATIAL_SEND_INTERVAL_MS) {
         lastMovingSpatialSentAt = timestamp;
@@ -578,25 +378,6 @@ async function saveAudio() {
         sourceNumber: parseInt(document.getElementById("sourceNumber").value, 10),
     };
     audios.push(audioData);
-    const randomColor =
-        "#" +
-        Math.floor(Math.random() * 16777215)
-            .toString(16)
-            .padStart(6, "0");
-
-    new maplibregl.Marker({
-        color: randomColor,
-    })
-        .setLngLat([audioData.longitude, audioData.latitude])
-        .setPopup(
-            new maplibregl.Popup({ offset: 25 }).setHTML(`
-                        <b>${audioData.name}</b><br>
-                        Source: ${audioData.sourceNumber}<br>
-                        Lat: ${audioData.latitude.toFixed(6)}<br>
-                        Lon: ${audioData.longitude.toFixed(6)}
-                    `),
-        )
-        .addTo(map);
     closeAudioModal();
 
     // send audio to Pd
@@ -713,11 +494,12 @@ function sendMovingSourceGain(sourceNumber, gain) {
 // ─────────────────────────────────────
 function sendSceneGain(value) {
     if (!Pd4Web) return;
+    const rampMs = value > 0 ? SCENE_GAIN_FADE_IN_MS : SCENE_GAIN_FADE_OUT_MS;
 
     ["scenegain"].forEach((receiver) => {
         if (typeof Pd4Web.sendList === "function") {
             try {
-                Pd4Web.sendList(receiver, [value, SCENE_GAIN_RAMP_MS]);
+                Pd4Web.sendList(receiver, [value, rampMs]);
                 return;
             } catch (error) {
                 console.warn(`Unable to send list to ${receiver}:`, error);
@@ -726,7 +508,7 @@ function sendSceneGain(value) {
 
         if (typeof Pd4Web.sendMessage === "function") {
             try {
-                Pd4Web.sendMessage(receiver, [value, SCENE_GAIN_RAMP_MS]);
+                Pd4Web.sendMessage(receiver, [value, rampMs]);
                 return;
             } catch (error) {
                 console.warn(`Unable to send message to ${receiver}:`, error);
@@ -739,9 +521,23 @@ function sendSceneGain(value) {
 
 // ─────────────────────────────────────
 function setWalkingState(isWalking) {
+    updateWalkingOverlay(isWalking);
     if (listenerIsWalking === isWalking) return;
     listenerIsWalking = isWalking;
     sendSceneGain(isWalking ? 1 : 0);
+}
+
+// ───────────────────────────────────────
+function updateWalkingOverlay(isWalking = listenerIsWalking) {
+    const overlay = document.getElementById("walkingOverlay");
+    const message = document.getElementById("walkingOverlayMessage");
+    if (!overlay || !message) return;
+
+    const isNearPracaDoRelogio = geoToRoomCoordinates([current_longitude, current_latitude]).inside;
+    message.textContent = isNearPracaDoRelogio
+        ? "Você precisa caminhar para ouvir os sons"
+        : "Você está longe da Praça do Relógio";
+    overlay.hidden = !patchIsOpen || (isNearPracaDoRelogio && isWalking);
 }
 
 // ─────────────────────────────────────
@@ -954,17 +750,12 @@ async function fileToArrayBuffer(audioFile) {
 const marker = new maplibregl.Marker();
 
 // ─────────────────────────────────────
-function moveNorth([lng, lat], meters) {
-    const metersPerDegreeLat = 111320; // approximate
-    const newLat = lat + meters / metersPerDegreeLat;
-    return [lng, newLat];
-}
-
 // ─────────────────────────────────────
 function updateListenerPosition(lng, lat, options = {}) {
     current_latitude = lat;
     current_longitude = lng;
     marker.setLngLat([lng, lat]);
+    updateWalkingOverlay();
 
     if (options.walking) {
         markWalking(options.walkingTimeoutMs ?? POINTER_WALKING_IDLE_MS);
@@ -1030,11 +821,6 @@ map.on("load", () => {
     current_latitude = center.lat;
     marker.setLngLat(center).addTo(map);
 
-    const soundPosition = moveNorth(CENTER_MAP, 50);
-    //new maplibregl.Marker().setLngLat(soundPosition).addTo(map);
-    addPlaceMarkers();
-    addMovingPlaceMarkers();
-    addCenterRect();
 });
 
 // native compass
@@ -1082,10 +868,10 @@ async function startExperience() {
     if (button) button.disabled = true;
 
     try {
-        setStartStatus("Requesting fullscreen...");
+        setStartStatus("Ativando a tela cheia...");
         await requestSmartphoneFullscreenAndWakeLock();
 
-        setStartStatus("Requesting compass access...");
+        setStartStatus("Solicitando acesso à bússola...");
         const compassAllowed = await requestCompassPermission();
         if (compassAllowed) {
             startListening();
@@ -1094,27 +880,28 @@ async function startExperience() {
         }
         const compassStarted = compassAllowed ? await waitForCompassReading() : false;
 
-        setStartStatus("Requesting location access...");
+        setStartStatus("Solicitando acesso à localização...");
         const locationAllowed = await startGeolocationTracking();
 
-        setStartStatus("Starting audio...");
+        setStartStatus("Iniciando o áudio...");
         await waitForPd4Web();
         if (!patchIsOpen) {
             await sendFiles();
             patchIsOpen = true;
         }
+        updateWalkingOverlay();
 
         if (!locationAllowed) {
-            setStartStatus("Started without location.");
+            setStartStatus("Iniciado sem acesso à localização.");
         } else if (!compassStarted) {
-            setStartStatus("Started without compass.");
+            setStartStatus("Iniciado sem acesso à bússola.");
         } else {
-            setStartStatus("Started.");
+            setStartStatus("Iniciado.");
         }
         window.setTimeout(hideStartPanel, 700);
     } catch (error) {
         console.warn("Unable to start sensors or audio:", error);
-        setStartStatus("Could not start. Tap Start again.");
+        setStartStatus("Não foi possível iniciar. Toque em Iniciar novamente.");
         if (button) button.disabled = false;
     }
 }
